@@ -1,0 +1,445 @@
+---
+title: "Assignment 3 - Part 1 - Study Group 7"
+author: "Kristian Severin, Lasse Hansen, Nikolaj Munch & Sarah Nielsen"
+date: "10/1/2020"
+output: html_document
+---
+
+```{r}
+pacman::p_load(tidyr, data.table, reshape2, purrr, readr, tidyverse, DescTools, EnvStats, effsize, lme4, ggpubr)
+```
+
+
+```{r Reading pitch data}
+setwd("/Users/lassehansen/Desktop/Lasse/Cognitive Science 3 Semester/ExpMeth 3/ExpMeth3 - A3/Pitch") #Setting wd to the pitch folder in this chunk
+
+folder <- "/Users/lassehansen/Desktop/Lasse/Cognitive Science 3 Semester/ExpMeth 3/ExpMeth3 - A3/Pitch/" #Setting folder to the same as WD
+
+file_list <- list.files(path= "/Users/lassehansen/Desktop/Lasse/Cognitive Science 3 Semester/ExpMeth 3/ExpMeth3 - A3/Pitch/" , pattern=".txt") #Specifying file list
+
+#Reading in each .txt file in file_list and rbind them into a data frame called data 
+df <- file_list %>%
+  set_names(.) %>%
+  map_df(read_table2, .id = "FileName")
+```
+
+
+```{r}
+artic <- read_delim("/Users/lassehansen/Desktop/Lasse/Cognitive Science 3 Semester/ExpMeth 3/ExpMeth3 - A3/Articulation.txt", delim = ",") #Reading in articulation data 
+
+#Dividing the strings up into what thee file name tells about the file
+df$Study <- substr(df$FileName, 0, 6) 
+df$Diagnosis <- substr(df$FileName, 8, 8)
+df$ID <- substr(df$FileName, 10, 12)
+df$trial <- substr(df$FileName, 13, 15)
+
+#Summarising the data based on unique study, diagnosis and ID
+data <- df %>%
+    mutate(Study = ifelse(Study == "Study1", "Study 1",
+                   ifelse(Study == "Study2", "Study 2",
+                   ifelse(Study == "Study3", "Study 3",
+                   ifelse(Study == "Study4", "Study 4",
+                   ifelse(Study == "Study5", "Study 5",
+                   ifelse(Study == "Study6", "Study 6", Study))))))) %>% 
+    mutate(Diagnosis = ifelse(Diagnosis == "0", "Control", "Schizophrenia")) %>% 
+    group_by(Study, Diagnosis, ID) %>% 
+    summarise(mPitch = mean(f0),
+              sdPitch = sd(f0), 
+              medianPitch =  median(f0),
+              iqrPitch = IQR(f0),
+              rangePitch = max(f0)-min(f0),
+              meanadPitch = MeanAD(f0),
+              cvPitch = cv(f0))
+```
+
+
+```{r Merging articulation data and pitch data}
+
+#Making columns that match our previous dataframe for them to be able to merge
+artic$nchar <- nchar(artic$soundname)
+artic$Study <- substr(artic$soundname, 0, 6)
+artic$Diagnosis <- substr(artic$soundname, 8, 8)
+artic$ID <- substr(artic$soundname, 10, 13)
+artic$trial <- substr(artic$soundname, 11, 15)
+
+#The ID and trial column are bugged because there are different number of characters in the different soundnames
+artic$ID <- gsub("T.*","", artic$ID)
+artic$trial <- gsub(".*T", "", artic$trial)
+
+#Making columns Study and Diagnosis match the ones from our previous dataframe
+artic <- artic %>% mutate(Study = ifelse(Study == "Study1", "Study 1",
+                   ifelse(Study == "Study2", "Study 2",
+                   ifelse(Study == "Study3", "Study 3",
+                   ifelse(Study == "Study4", "Study 4",
+                   ifelse(Study == "Study5", "Study 5",
+                   ifelse(Study == "Study6", "Study 6", Study))))))) %>% 
+          mutate(Diagnosis = ifelse(Diagnosis == "0", "Control", "Schizophrenia")) 
+
+#Merging articulation and pitch daat
+dat <- dplyr::full_join(data, artic, by = c("Study", "Diagnosis", "ID")) %>% 
+
+#Making a unique id for the participants
+dat$unik <- paste(dat$Diagnosis, dat$ID)
+
+
+
+#Randomizing them
+dat$ID <- as.factor(dat$unik)
+dat$ID <- as.numeric(dat$unik)
+dat$ID <- as.factor(dat$unik)
+```
+
+```{r Merging demographic data with the other data}
+
+#Reading in the data 
+DEMO <- read.csv("DemographicData.csv", sep = ";")
+DEMO$ID <- DEMO$Participant
+
+#Mutating the columns study and making an ID column as before 
+DEMO <- DEMO %>% mutate(Study = ifelse(Study == "1", "Study 1",
+                   ifelse(Study == "2", "Study 2",
+                   ifelse(Study == "3", "Study 3",
+                   ifelse(Study == "4", "Study 4",
+                   ifelse(Study == "5", "Study 5",
+                   ifelse(Study == "6", "Study 6",
+                   ifelse(Study == "7", "Study 7", Study))))))))
+DEMO$ID <- paste(DEMO$Diagnosis, DEMO$ID)
+
+#Merging the data
+dat <- full_join(dat, DEMO, by = c("Study", "Diagnosis", "ID")) %>%
+       subset(., Study %in% c("Study 1", "Study 2", "Study 3", "Study 4"))
+```
+
+
+
+```{r Making variables sensible}
+dat$speechrate <- as.numeric(dat$` speechrate (nsyll/dur)`)
+dat$phonationtime <- as.numeric(dat$` phonationtime (s)`)
+dat$ID <- as.factor(dat$ID)
+dat$gender <- as.factor(dat$Gender.x)
+```
+
+```{r Investigating demographic data}
+# Loading demograhic data
+DEMO <-  read_csv("DemographicData.csv")
+
+# There are two missing values of Age in Study 3's control group.
+DEMO %>% 
+  filter(Study == "3") %>% 
+  group_by(Diagnosis) %>% 
+  summarise("mean" = mean(Age, na.rm = T), "SD" = sd(Age, na.rm = T))
+# The mean age for the control group is 33.8 years (SD = 12.46) and the mean age for the schizophrenic group is 34.32 (SD = 12.83). As the two groups seem fairly balanced in terms of age (= age is not a confound variable) and age is not something we will use later in our classification model, we found it justifiable to keep these two data points and substitute the mean age for the control group instead
+DEMO[163,6] <- 33.8
+DEMO[165,6] <- 33.8
+
+# Filtering the Danish studies
+DEM <- DEMO %>% 
+  filter(
+    Study %in% c("1", "2", "3", "4")
+  )
+
+# Changing classes of relevant variables
+DEM$Diagnosis <- as.factor(DEM$Diagnosis)
+DEM$Gender <- as.factor(DEM$Gender)
+
+##### Investigating whether the control group and the schizophrenic group are balanced
+DEM %>% 
+  group_by(Diagnosis) %>%
+  count()
+
+DEM %>% 
+  group_by(Diagnosis) %>%
+  count(Gender) %>% 
+  kbl() %>%
+  kable_minimal()
+
+DEM %>% 
+  group_by(Diagnosis) %>% 
+  summarise("Mean age" = mean(Age, na.rm = T), "SD" = sd(Age, na.rm = T)) %>% 
+  kbl() %>%
+  kable_minimal()
+
+DEM %>% 
+  group_by(Diagnosis) %>% 
+  summarise("Mean Verbal IQ" = mean(VerbalIQ, na.rm = T), "SD (VIQ)" = sd(VerbalIQ, na.rm = T),
+            "Mean Non-verbal IQ" = mean(NonVerbalIQ, na.rm = T), "SD (NVIQ)" = sd(NonVerbalIQ, na.rm = T),
+            "Total IQ" = mean(TotalIQ, na.rm = T), "SD (TIQ)" = sd(TotalIQ, na.rm = T)
+            ) %>% 
+  kbl() %>%
+  kable_minimal()
+
+##### Investigating whether the studies are balanced
+DEM %>% 
+  group_by(Study, Diagnosis) %>%
+  count(Diagnosis) %>% 
+  kbl() %>%
+  kable_minimal()
+# Not included in the report due to redundancy (the overall number of participants in each group was balanced)
+
+DEM %>% 
+  group_by(Study, Diagnosis) %>%
+  count(Gender) %>% 
+  kbl() %>%
+  kable_minimal()
+
+DEM %>% 
+  group_by(Study) %>% 
+  summarise("Mean age" = mean(Age, na.rm = T), "SD" = sd(Age, na.rm = T)) %>% 
+  kbl() %>%
+  kable_minimal()
+
+DEM$SANS <- as.numeric(DEM$SANS)
+DEM$SAPS <- as.numeric(DEM$SAPS)
+DEM %>% 
+  filter(Diagnosis == "Schizophrenia",
+         Study %in% c("1", "2", "4")
+         ) %>% 
+  group_by(Study) %>% 
+  summarise("Mean SANS" = mean(SANS, na.rm = T), "SD (SANS)" = sd(SANS, na.rm = T),
+            "Mean SAPS" = mean(SAPS, na.rm = T), "SD (SAPS)" = sd(SAPS, na.rm = T)
+            ) %>% 
+  kbl() %>%
+  kable_minimal()
+
+DEM %>% 
+  filter(Study %in% c("1", "2")) %>% 
+  group_by(Study) %>% 
+  summarise("Mean Verbal IQ" = mean(VerbalIQ, na.rm = T), "SD (VIQ)" = sd(VerbalIQ, na.rm = T),
+            "Mean Non-verbal IQ" = mean(NonVerbalIQ, na.rm = T), "SD (NVIQ)" = sd(NonVerbalIQ, na.rm = T),
+            "Total IQ" = mean(TotalIQ, na.rm = T), "SD (TIQ)" = sd(TotalIQ, na.rm = T)
+            ) %>% 
+  kbl() %>%
+  kable_minimal()
+
+# There are two missing values of Age in Study 3's control group.
+DEMO %>% 
+  filter(Study == "3") %>% 
+  group_by(Diagnosis) %>% 
+  summarise("mean" = mean(Age, na.rm = T), "SD" = sd(Age, na.rm = T))
+
+# The mean age for the control group is 33.8 years (SD = 12.46) and the mean age for the schizophrenic group is 34.32 (SD = 12.83). As the two groups seem fairly balanced in terms of age (age is not a confound variable) and age is not something we will use later in our classification model, we found it justifiable to keep these two data points and substitute the mean age for the control group instead
+DEMO[163,6] <- 33.8
+DEMO[165,6] <- 33.8
+# Filtering the Danish studies
+DEM <- DEMO %>% 
+  filter(
+    Study %in% c("1", "2", "3", "4")
+  )
+# Changing classes of relevant variables
+DEM$Diagnosis <- as.factor(DEM$Diagnosis)
+DEM$Gender <- as.factor(DEM$Gender)
+##### Investigating whether the control group and the schizophrenic group are balanced
+DEM %>% 
+  group_by(Diagnosis) %>%
+  count()
+DEM %>% 
+  group_by(Diagnosis) %>%
+  count(Gender) %>% 
+  kbl() %>%
+  kable_minimal()
+DEM %>% 
+  group_by(Diagnosis) %>% 
+  summarise("Mean age" = mean(Age, na.rm = T), "SD" = sd(Age, na.rm = T)) %>% 
+  kbl() %>%
+  kable_minimal()
+DEM %>% 
+  group_by(Diagnosis) %>% 
+  summarise("Mean Verbal IQ" = mean(VerbalIQ, na.rm = T), "SD (VIQ)" = sd(VerbalIQ, na.rm = T),
+            "Mean Non-verbal IQ" = mean(NonVerbalIQ, na.rm = T), "SD (NVIQ)" = sd(NonVerbalIQ, na.rm = T),
+            "Total IQ" = mean(TotalIQ, na.rm = T), "SD (TIQ)" = sd(TotalIQ, na.rm = T)
+            ) %>% 
+  kbl() %>%
+  kable_minimal()
+##### Investigating whether the studies are balanced
+DEM %>% 
+  group_by(Study, Diagnosis) %>%
+  count(Diagnosis) %>% 
+  kbl() %>%
+  kable_minimal()
+# Not included in the report due to redundancy (the overall number of participants in each group was balanced)
+DEM %>% 
+  group_by(Study, Diagnosis) %>%
+  count(Gender) %>% 
+  kbl() %>%
+  kable_minimal()
+
+DEM %>% 
+  group_by(Study) %>% 
+  summarise("Mean age" = mean(Age, na.rm = T), "SD" = sd(Age, na.rm = T)) %>% 
+  kbl() %>%
+  kable_minimal()
+
+DEM$SANS <- as.numeric(DEM$SANS)
+DEM$SAPS <- as.numeric(DEM$SAPS)
+
+DEM %>% 
+  filter(Diagnosis == "Schizophrenia",
+         Study %in% c("1", "2", "4")
+         ) %>% 
+  group_by(Study) %>% 
+  summarise("Mean SANS" = mean(SANS, na.rm = T), "SD (SANS)" = sd(SANS, na.rm = T),
+            "Mean SAPS" = mean(SAPS, na.rm = T), "SD (SAPS)" = sd(SAPS, na.rm = T)
+            ) %>% 
+  kbl() %>%
+  kable_minimal()
+DEM %>% 
+  filter(Study %in% c("1", "2")) %>% 
+  group_by(Study) %>% 
+  summarise("Mean Verbal IQ" = mean(VerbalIQ, na.rm = T), "SD (VIQ)" = sd(VerbalIQ, na.rm = T),
+            "Mean Non-verbal IQ" = mean(NonVerbalIQ, na.rm = T), "SD (NVIQ)" = sd(NonVerbalIQ, na.rm = T),
+            "Total IQ" = mean(TotalIQ, na.rm = T), "SD (TIQ)" = sd(TotalIQ, na.rm = T)
+            ) %>% 
+  kbl() %>%
+  kable_minimal()
+```
+```
+
+
+```{r Rescaling the columns for our analysis}
+
+#Creating a function for scaling
+scaling <- function(x) {
+  (x - mean(x))/sd(x)
+}
+
+
+dat$rmPitch <- scaling(dat$mPitch)
+dat$rsSpeechrate <- scaling(dat$speechrate)
+dat$rsRangePitch <- scaling(dat$rangePitch)
+dat$rsPhonationtime <- scaling(dat$phonationtime)
+dat$iqrPitch <- scaling(dat$iqrPitch)
+dat$ASD <- dat$` ASD (speakingtime/nsyll)`
+
+```
+
+```{r Ruling out the last 40 observations as we have NA's in voice data}
+dat <- dat[1:1900,]
+```
+
+```{r Making porportion of spoken time and pause duration columns}
+dat$ProportionSP <- (dat$rsPhonationtime/dat$dur)
+
+dat$dur <- as.numeric(dat$` dur (s)`)
+dat$npause <- as.numeric(dat$` npause`)
+
+dat$Pause_duration <- (dat$dur - dat$phonationtime) / dat$npause
+
+dat$Pause_duration <- gsub("Inf", NA, dat$Pause_duration)
+dat$Pause_duration <- as.numeric(dat$Pause_duration)
+```
+
+```{r Writing our newly made datafrmae}
+write_csv(dat, "MergedDat.csv")
+```
+
+```{r}
+dat$rmPitch <- (dat$mPitch-mean(dat$mPitch))/sd(dat$mPitch) #Mean centered pitch
+dat$rsSpeechrate <- (dat$speechrate-mean(dat$speechrate))/sd(dat$speechrate)
+dat$rsRangePitch <- (dat$rangePitch-mean(dat$rangePitch))/sd(dat$rangePitch)
+dat$rsPhonationtime <- (dat$phonationtime-mean(dat$phonationtime))/sd(dat$phonationtime)
+```
+
+```{r Plot for model 1}
+ggline(dat,
+       x = "Diagnosis",
+       y = "rangepitch",
+       col = "gender",
+       add = c("mean_se", "dodge"),
+       palette = "jco")
+
+```
+
+
+```{r Plot for model 2}
+ggline(dat,
+       x = "Diagnosis",
+       y = "ProportionSP",
+       add = c("mean_se", "dodge"),
+       palette = "jco")
+
+```
+
+
+```{r Plot for model 3}
+ggline(dat,
+       x = "Diagnosis",
+       y = "speechrate",
+       add = c("mean_se", "dodge"),
+       palette = "jco")
+
+```
+
+
+```{r Plot for model 4}
+ggline(dat,
+       x = "Diagnosis",
+       y = "Pause_duration",
+       add = c("mean_se", "dodge"),
+       palette = "jco")
+
+```
+
+
+```{r Making models}
+mod0 <- glmer(Diagnosis ~ 1 + (1|ID), data = dat, family = binomial)
+mod1 <- glmer(Diagnosis ~ rsRangePitch + (1|ID), data = dat, family = binomial)
+mod2 <- glmer(Diagnosis ~ ProportionSP + (1|ID), data = dat, family = binomial)
+mod3 <- glmer(Diagnosis ~ speechrate + (1|ID), data = dat, family = binomial)
+mod4 <- glmer(Diagnosis ~ Pause_duration + (1|ID), data = dat, family = binomial)
+mod5 <- glmer(Diagnosis ~ rsRangePitch*gender + (1|ID) + (1|Study), data = dat, family = binomial)
+```
+
+```{r Calculating hedges g for model 1-4}
+#Hedge's g pitch variability
+
+#mean, sd, and count is calculated
+dat %>% group_by(Diagnosis) %>% summarise(mean(rsRangePitch, na.rm = T))
+dat %>% group_by(Diagnosis) %>% summarise(sd(rsRangePitch, na.rm = T))
+dat %>% group_by(Diagnosis) %>% count()
+
+#Hedge's g
+esc_mean_sd(grp1m = -0.1268533	, grp1sd = 0.894269, grp1n = 903	,
+grp2m = 0.1148932, grp2sd = 1.074515	, grp2n = 997, es.type = "g")
+
+#Hedge's g proportion of spoken time
+#Proportion of spoken time is created from phonation time and duration
+dat$ProportionSP <- (Merged$rsPhonationtime/Merged$`dur (s)`)
+
+#mean, sd, and count is calculated
+dat %>% group_by(Diagnosis) %>% summarise(mean(ProportionSP, na.rm = T))
+dat %>% group_by(Diagnosis) %>% summarise(sd(ProportionSP, na.rm = T))
+dat %>% group_by(Diagnosis) %>% count()
+#Hedge's g
+esc_mean_sd(grp1m = -0.09521360	, grp1sd = 0.1860045	, grp1n = 903,
+grp2m = -0.04161766		, grp2sd = 0.1115830	, grp2n = 997, es.type = "g")
+
+#Hedge's g proportion of speech rate
+
+#mean, sd, and count is calculated
+dat %>% group_by(Diagnosis) %>% summarise(mean(rsSpeechrate, na.rm = T))
+dat %>% group_by(Diagnosis) %>% summarise(sd(rsSpeechrate, na.rm = T))
+dat %>% group_by(Diagnosis) %>% count()
+#Hedge's g
+esc_mean_sd(grp1m = -0.1555079, grp1sd = 1.0685444	, grp1n = 903,
+grp2m = 0.1408462	, grp2sd = 0.9114912	, grp2n = 997, es.type = "g")
+
+#Hedge's g pause duration
+#Pause duration is created from duration, phonation time, and npause
+dat$Pause_duration <- (dat$'dur (s)' - dat$'phonationtime (s)') / dat$npause
+#Inf (all cases where npause = 0) is made into NA's 
+dat$Pause_duration <- gsub("Inf", NA, dat$Pause_duration)
+#Numeric
+dat$Pause_duration <- as.numeric(dat$Pause_duration)
+
+#mean, sd, and count is calculated
+dat %>% group_by(Diagnosis) %>% summarise(mean(Pause_duration, na.rm = T))
+dat %>% group_by(Diagnosis) %>% summarise(sd(Pause_duration, na.rm = T))
+dat %>% group_by(Diagnosis) %>% count()
+
+#Hedge's g
+esc_mean_sd(grp1m = 1.1064016	, grp1sd = 0.9535842	, grp1n = 903,
+grp2m = 0.9182749	, grp2sd = 0.4656295	, grp2n = 997, es.type = "g")
+```
+
+
+
