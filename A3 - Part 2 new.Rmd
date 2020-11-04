@@ -1,0 +1,166 @@
+---
+title: "A3 - Part 2, Study Group 7"
+author: "Kristian Severin, Lasse Hansen, Nikolaj Munch & Sarah Nielsen"
+date: "11/04/2020"
+output: html_document
+---
+
+```{r}
+pacman::p_load(tidyr, data.table, reshape2, purrr, readr, tidyverse, DescTools, EnvStats, effsize, lme4, ggpubr, caret, parsnip, knitr, dplyr, kableExtra, Boruta)
+```
+
+```{r Testing/Training on same dataset (CV) }
+dat <- read.csv("MergedDat1.csv") #Loading dataset from part 1
+# Choosing relevant features
+dat2 <- dat %>% 
+  dplyr::select("Diagnosis", "gender", "ID", "Study", "rangePitch")
+dat2 <- na.omit(dat2)
+
+# Creating variable rsRangePitch
+dat2$rsRangePitch <- (dat2$rangePitch-mean(dat2$rangePitch))/sd(dat2$rangePitch)
+
+# Loading model 5
+mod5 <- glm(Diagnosis ~ rsRangePitch*gender + ID + Study, data = dat2, family = binomial)
+
+# Confusion matrix for model 5
+dat2$pred <- logit2prob(predict(mod5, re.form = NA)) %>% 
+  as.numeric()
+dat2$pred <- ifelse(dat2$pred > 0.5, "Schizophrenia", "Control") %>% 
+  as.factor()
+mod5_cm <- confusionMatrix(data = dat2$pred, reference = dat2$Diagnosis, positive = "Schizophrenia")
+mod5_cm
+  
+# ROC Curve
+dat2$pred <- dat2$pred %>% as.numeric()
+rocCurve <- roc(response = dat2$Diagnosis, predictor = dat2$pred)
+pROC::auc(rocCurve) 
+ci(rocCurve)
+plot(rocCurve, legacy.axes = TRUE)
+```
+
+
+```{r Loading }
+dat <- read.csv("MergedDat1.csv") #Loading dataset from part 1
+dat <- dat %>% dplyr::select("Diagnosis","ID", "Study", "gender", "rangePitch") #Subsetting the variables our model takes
+dat$Diagnosis <- as.factor(ifelse(dat$Diagnosis == "1", "Schizophrenia", "Control")) #Making 
+dat <- na.omit(dat)
+```
+
+
+```{r}
+library(caret)
+set.seed(777)
+
+#Marking the partitions
+part <- createDataPartition(dat$Diagnosis, p = 0.7, list = F)
+train_M5 <- data.frame(dat[part, ])
+test_M5 <- data.frame(dat[-part, ])
+split_rule <- trainControl(method = "repeatedcv", number = 10, repeats = 3, classProbs = T, summaryFunction = twoClassSummary)
+```
+
+```{r Scaling varibale for out best model}
+train_M5$rsRangePitch <- (train_M5$rangePitch-mean(train_M5$rangePitch))/sd(train_M5$rangePitch)
+
+#Using train scaled data to scale the test data
+test_M5$rsRangePitch <- (test_M5$rangePitch-mean(train_M5$rangePitch))/sd(train_M5$rangePitch)
+
+train_M5$gender <- as.factor(train_M5$gender)
+```
+
+
+```{r Building first model}
+log_model <- caret::train(Diagnosis ~ rsRangePitch*gender + ID + Study, 
+                          data = train_M5, 
+                          trControl = split_rule, 
+                          method = "glm", 
+                          preProcess = c("center", "scale"), metric = "ROC"
+                          )
+```
+
+```{r Making CM}
+glmtest <- predict(log_model, newdata = test_M5)
+log_cv_cm <- confusionMatrix(data = glmtest, test_M5$Diagnosis)
+log_cv_cm
+```
+
+```{r Feature Selection with Boruta package}
+library(Boruta)
+
+boruta_output <- Boruta(Diagnosis ~ ., data = (train_M6), doTrace=0)
+names(boruta_output)
+
+boruta_signif <- getSelectedAttributes(boruta_output, withTentative = TRUE)
+print(boruta_signif)
+
+
+# Do a tentative rough fix
+roughFixMod <- TentativeRoughFix(boruta_output)
+boruta_signif <- getSelectedAttributes(roughFixMod)
+print(boruta_signif)
+
+# Variable Importance Scores
+imps <- attStats(roughFixMod)
+imps2 = imps[imps$decision != 'Rejected', c('meanImp', 'decision')]
+head(imps2[order(-imps2$meanImp), ])  # descending sort
+
+# Plot variable importance
+plot(boruta_output, cex.axis=.7, las=2, xlab="", main="Variable Importance")
+```
+
+
+```{r Loading new data with other features}
+data <- read.csv("MergedDat1.csv") #Loading dataset from part 1
+dat1 <- data %>% dplyr::select("Diagnosis","ID", "Study", "gender", "rangePitch", "iqrPitch", "meanadPitch", "sdPitch", "medianPitch", "mPitch") #Subsetting the variables our model takes
+dat1$Diagnosis <- as.factor(ifelse(dat1$Diagnosis == "1", "Schizophrenia", "Control")) #Making 
+dat1 <- na.omit(dat1)
+```
+
+
+```{r}
+set.seed(777)
+
+#Marking the partitions
+part1 <- createDataPartition(dat1$Diagnosis, p = 0.7, list = F)
+train_M6 <- data.frame(dat1[part, ])
+test_M6 <- data.frame(dat1[-part, ])
+split_rule1 <- trainControl(method = "repeatedcv", number = 10, repeats = 3, classProbs = T, summaryFunction = twoClassSummary)
+```
+
+
+```{r Scaling varibale for out best model}
+#Scaling training data
+train_M6$rsRangePitch <- (train_M6$rangePitch-mean(train_M6$rangePitch))/sd(train_M6$rangePitch)
+train_M6$rsIQRPitch <- (train_M6$iqrPitch-mean(train_M6$iqrPitch))/sd(train_M6$iqrPitch)
+train_M6$rsMeanAdPitch <- (train_M6$meanadPitch-mean(train_M6$meanadPitch))/sd(train_M6$meanadPitch)
+train_M6$rsSdPitch <- (train_M6$sdPitch-mean(train_M6$sdPitch))/sd(train_M6$sdPitch)
+train_M6$rsMedianPitch <- (train_M6$medianPitch-mean(train_M6$medianPitch))/sd(train_M6$medianPitch)
+train_M6$rsMPitch <- (train_M6$mPitch-mean(train_M6$mPitch))/sd(train_M6$mPitch)
+
+#Using train scaled data to scale the test data
+test_M6$rsRangePitch <- (test_M6$rangePitch-mean(train_M6$rangePitch))/sd(train_M6$rangePitch)
+test_M6$rsIQRPitch <- (test_M6$iqrPitch-mean(train_M6$iqrPitch))/sd(train_M6$iqrPitch)
+test_M6$rsMeanAdPitch <- (test_M6$meanadPitch-mean(train_M6$meanadPitch))/sd(train_M6$meanadPitch)
+test_M6$rsSdPitch <- (test_M6$sdPitch-mean(train_M6$sdPitch))/sd(train_M6$sdPitch)
+test_M6$rsMedianPitch <- (test_M6$medianPitch-mean(train_M6$medianPitch))/sd(train_M6$medianPitch)
+test_M6$rsMPitch <- (test_M6$mPitch-mean(train_M6$mPitch))/sd(train_M6$mPitch)
+```
+
+
+```{r Building model}
+log_model2 <- caret::train(Diagnosis ~ rsRangePitch*gender + rsIQRPitch + rsMeanAdPitch + rsSdPitch + rsMedianPitch + Study + ID, 
+                          data = train_M6, 
+                          trControl = split_rule, 
+                          method = "glm", 
+                          preProcess = c("center", "scale"), metric = "ROC"
+                          )
+
+glmtest2 <- predict(log_model2, newdata = test_M6)
+log_cv_cm2 <- confusionMatrix(data = glmtest2, test_M6$Diagnosis)
+log_cv_cm2
+```
+
+
+
+
+
+
